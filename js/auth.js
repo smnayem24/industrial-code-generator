@@ -27,17 +27,150 @@ window.FIREBASE_CONFIG = window.FIREBASE_CONFIG || {
 
 window.WHITELISTED_EMAILS = window.WHITELISTED_EMAILS || [];
 
-// Current Auth State
+// Current Auth State & Rate Limiting (Brute Force Protection)
 LabelApp.Auth.state = {
   isConfigured: false,
   currentUser: null,
   isBypassed: false
 };
 
+LabelApp.Auth.RATE_LIMIT = {
+  maxAttempts: 5,                   // Maximum 5 consecutive failed attempts
+  lockoutDurationMs: 15 * 60 * 1000 // 15 minutes lockout freeze
+};
+
+LabelApp.Auth.lockoutTimer = null;
+
+/**
+ * Check if the terminal is currently locked down due to rate limiting
+ */
+LabelApp.Auth.isLockedOut = function() {
+  const lockoutUntil = parseInt(localStorage.getItem('terminal_lockout_until') || '0', 10);
+  if (lockoutUntil && Date.now() < lockoutUntil) {
+    LabelApp.Auth.applyLockoutUI(lockoutUntil);
+    return true;
+  }
+  if (lockoutUntil && Date.now() >= lockoutUntil) {
+    LabelApp.Auth.clearLockout();
+  }
+  return false;
+};
+
+/**
+ * Freeze login controls and render active security countdown
+ */
+LabelApp.Auth.applyLockoutUI = function(lockoutUntil) {
+  const btnGoogle = document.getElementById('btnGoogleAuth');
+  const btnSubmit = document.querySelector('#authOverlay button[type="submit"]');
+  const emailInput = document.getElementById('authEmailInput');
+  const passInput = document.getElementById('authPassInput');
+
+  if (btnGoogle) {
+    btnGoogle.disabled = true;
+    btnGoogle.style.opacity = '0.5';
+    btnGoogle.style.pointerEvents = 'none';
+  }
+  if (btnSubmit) {
+    btnSubmit.disabled = true;
+    btnSubmit.style.opacity = '0.7';
+  }
+  if (emailInput) emailInput.disabled = true;
+  if (passInput) passInput.disabled = true;
+
+  if (LabelApp.Auth.lockoutTimer) clearInterval(LabelApp.Auth.lockoutTimer);
+
+  const updateCountdown = () => {
+    const diff = lockoutUntil - Date.now();
+    if (diff <= 0) {
+      LabelApp.Auth.clearLockout();
+      return;
+    }
+    const mins = Math.floor(diff / 60000);
+    const secs = Math.floor((diff % 60000) / 1000);
+    const timeStr = `${mins}m ${String(secs).padStart(2, '0')}s`;
+
+    if (btnSubmit) btnSubmit.textContent = `🔒 Terminal Frozen (${timeStr})`;
+    LabelApp.Auth.showStatus(
+      `🚨 Security Lockdown: 5 failed attempts reached. Terminal access is frozen for ${timeStr} to prevent brute-force attacks.`,
+      'error'
+    );
+  };
+
+  updateCountdown();
+  LabelApp.Auth.lockoutTimer = setInterval(updateCountdown, 1000);
+};
+
+/**
+ * Clear lockout state and re-enable login inputs
+ */
+LabelApp.Auth.clearLockout = function() {
+  if (LabelApp.Auth.lockoutTimer) {
+    clearInterval(LabelApp.Auth.lockoutTimer);
+    LabelApp.Auth.lockoutTimer = null;
+  }
+  localStorage.removeItem('terminal_lockout_until');
+  localStorage.removeItem('terminal_failed_attempts');
+
+  const btnGoogle = document.getElementById('btnGoogleAuth');
+  const btnSubmit = document.querySelector('#authOverlay button[type="submit"]');
+  const emailInput = document.getElementById('authEmailInput');
+  const passInput = document.getElementById('authPassInput');
+
+  if (btnGoogle) {
+    btnGoogle.disabled = false;
+    btnGoogle.style.opacity = '1';
+    btnGoogle.style.pointerEvents = 'auto';
+  }
+  if (btnSubmit) {
+    btnSubmit.disabled = false;
+    btnSubmit.style.opacity = '1';
+    btnSubmit.textContent = 'Sign In';
+  }
+  if (emailInput) emailInput.disabled = false;
+  if (passInput) passInput.disabled = false;
+
+  LabelApp.Auth.clearStatus();
+};
+
+/**
+ * Record a failed login or unauthorized access attempt
+ */
+LabelApp.Auth.recordFailedAttempt = function(reason) {
+  let attempts = parseInt(localStorage.getItem('terminal_failed_attempts') || '0', 10) + 1;
+  localStorage.setItem('terminal_failed_attempts', String(attempts));
+
+  if (attempts >= LabelApp.Auth.RATE_LIMIT.maxAttempts) {
+    const lockoutUntil = Date.now() + LabelApp.Auth.RATE_LIMIT.lockoutDurationMs;
+    localStorage.setItem('terminal_lockout_until', String(lockoutUntil));
+    LabelApp.Auth.applyLockoutUI(lockoutUntil);
+  } else {
+    const remaining = LabelApp.Auth.RATE_LIMIT.maxAttempts - attempts;
+    LabelApp.Auth.showStatus(
+      `${reason || 'Invalid credentials.'} (Security Warning: ${remaining} attempt${remaining > 1 ? 's' : ''} remaining before 15-minute terminal lockdown)`,
+      'error'
+    );
+  }
+};
+
+/**
+ * Reset failed attempts upon successful authorized authentication
+ */
+LabelApp.Auth.resetFailedAttempts = function() {
+  localStorage.removeItem('terminal_failed_attempts');
+  localStorage.removeItem('terminal_lockout_until');
+  if (LabelApp.Auth.lockoutTimer) {
+    clearInterval(LabelApp.Auth.lockoutTimer);
+    LabelApp.Auth.lockoutTimer = null;
+  }
+};
+
 /**
  * Initialize Firebase and Authentication Listeners
  */
 LabelApp.Auth.init = function() {
+  // Check rate limit state first
+  if (LabelApp.Auth.isLockedOut()) return;
+
   const cfg = window.FIREBASE_CONFIG;
   const isPlaceholder = !cfg || !cfg.apiKey || cfg.apiKey === 'YOUR_API_KEY' || cfg.apiKey.includes('YOUR_');
 
@@ -104,10 +237,6 @@ LabelApp.Auth.handleAuthState = async function(user) {
   if (whitelist.length > 0 && !whitelist.includes(email)) {
     // ACCESS DENIED: Account is NOT authorized!
     console.warn(`[LabelApp.Auth] Unauthorized access attempt by: ${email}. Automatically purging user from database...`);
-    LabelApp.Auth.showStatus(
-      `⛔ Access Denied: "${email}" is not authorized. Account purged from database.`,
-      'error'
-    );
     try {
       // Instantly delete the unauthorized account from Firebase Authentication database
       await user.delete();
@@ -115,10 +244,12 @@ LabelApp.Auth.handleAuthState = async function(user) {
       console.warn('[LabelApp.Auth] Account purge fallback to sign out:', delErr);
       await firebase.auth().signOut();
     }
+    LabelApp.Auth.recordFailedAttempt(`Unauthorized account "${email}". Access denied and purged.`);
     return;
   }
 
-  // ACCESS GRANTED
+  // ACCESS GRANTED: Reset failed counter
+  LabelApp.Auth.resetFailedAttempts();
   LabelApp.Auth.state.currentUser = user;
   if (userPill) {
     userPill.textContent = user.email || 'Authorized Operator';
@@ -147,6 +278,8 @@ LabelApp.Auth.handleAuthState = async function(user) {
  * Sign in with Google (1-Click)
  */
 LabelApp.Auth.loginWithGoogle = async function() {
+  if (LabelApp.Auth.isLockedOut()) return;
+
   if (!LabelApp.Auth.state.isConfigured) {
     LabelApp.Auth.showStatus('Please configure Firebase in js/auth.js first.', 'error');
     return;
@@ -163,19 +296,22 @@ LabelApp.Auth.loginWithGoogle = async function() {
     const whitelist = (window.WHITELISTED_EMAILS || []).map(e => (e || '').toLowerCase().trim()).filter(Boolean);
 
     if (whitelist.length > 0 && !whitelist.includes(email)) {
-      LabelApp.Auth.showStatus(
-        `⛔ Access Denied: "${email}" is not authorized. Account purged from database.`,
-        'error'
-      );
       try {
         await user.delete();
       } catch (e) {
         await firebase.auth().signOut();
       }
+      LabelApp.Auth.recordFailedAttempt(`Unauthorized account "${email}". Access denied and purged.`);
+    } else {
+      LabelApp.Auth.resetFailedAttempts();
     }
   } catch (err) {
     console.error('[LabelApp.Auth] Google Login Error:', err);
-    LabelApp.Auth.showStatus(LabelApp.Auth.formatErrorMessage(err), 'error');
+    if (err.code !== 'auth/popup-closed-by-user') {
+      LabelApp.Auth.recordFailedAttempt(LabelApp.Auth.formatErrorMessage(err));
+    } else {
+      LabelApp.Auth.showStatus(LabelApp.Auth.formatErrorMessage(err), 'error');
+    }
   }
 };
 
@@ -183,6 +319,8 @@ LabelApp.Auth.loginWithGoogle = async function() {
  * Sign in with Email & Password
  */
 LabelApp.Auth.loginWithEmail = async function() {
+  if (LabelApp.Auth.isLockedOut()) return;
+
   if (!LabelApp.Auth.state.isConfigured) {
     LabelApp.Auth.showStatus('Please configure Firebase in js/auth.js first.', 'error');
     return;
@@ -202,9 +340,10 @@ LabelApp.Auth.loginWithEmail = async function() {
 
   try {
     await firebase.auth().signInWithEmailAndPassword(email, password);
+    LabelApp.Auth.resetFailedAttempts();
   } catch (err) {
     console.error('[LabelApp.Auth] Email Login Error:', err);
-    LabelApp.Auth.showStatus(LabelApp.Auth.formatErrorMessage(err), 'error');
+    LabelApp.Auth.recordFailedAttempt(LabelApp.Auth.formatErrorMessage(err));
   }
 };
 
