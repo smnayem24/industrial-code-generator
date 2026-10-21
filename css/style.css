@@ -1429,3 +1429,17 @@ footer {
   border-color: #FCA5A5;
   color: #DC2626;
 }
+
+/* ================= HIDE NETLIFY PROMOTIONAL BADGE & DRAWER ================= */
+#netlify-badge,
+[data-netlify-badge],
+netlify-drawer,
+.netlify-drawer,
+iframe[src*="netlify"],
+div:has(> iframe[src*="netlify"]) {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
