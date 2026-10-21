@@ -202,24 +202,7 @@ LabelApp.Auth.signupWithEmail = async function() {
   const email = (emailInput ? emailInput.value : '').trim();
   const password = passInput ? passInput.value : '';
 
-  if (!email || !password) {
-    LabelApp.Auth.showStatus('Please enter both Email and Password.', 'error');
-    return;
-  }
-
-  if (password.length < 6) {
-    LabelApp.Auth.showStatus('Password must be at least 6 characters long.', 'error');
-    return;
-  }
-
-  LabelApp.Auth.showStatus('Registering operator account...', 'info');
-
-  try {
-    await firebase.auth().createUserWithEmailAndPassword(email, password);
-  } catch (err) {
-    console.error('[LabelApp.Auth] Signup Error:', err);
-    LabelApp.Auth.showStatus(LabelApp.Auth.formatErrorMessage(err), 'error');
-  }
+  LabelApp.Auth.showStatus('Public registration is disabled. Administrator access is provisioned via Firebase Console.', 'error');
 };
 
 /**
