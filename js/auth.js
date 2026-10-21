@@ -348,6 +348,36 @@ LabelApp.Auth.loginWithEmail = async function() {
 };
 
 /**
+ * Send Password Reset / Setup Link to Operator Email
+ */
+LabelApp.Auth.forgotPassword = async function() {
+  if (LabelApp.Auth.isLockedOut()) return;
+
+  if (!LabelApp.Auth.state.isConfigured) {
+    LabelApp.Auth.showStatus('Please configure Firebase in js/auth.js first.', 'error');
+    return;
+  }
+
+  const emailInput = document.getElementById('authEmailInput');
+  const email = (emailInput ? emailInput.value : '').trim();
+
+  if (!email) {
+    LabelApp.Auth.showStatus('Please enter your operator email in the input above first.', 'info');
+    return;
+  }
+
+  LabelApp.Auth.showStatus('Sending password setup/reset link...', 'info');
+
+  try {
+    await firebase.auth().sendPasswordResetEmail(email);
+    LabelApp.Auth.showStatus(`✅ Password link sent to "${email}"! Check your inbox to set or restore your password.`, 'success');
+  } catch (err) {
+    console.error('[LabelApp.Auth] Password reset error:', err);
+    LabelApp.Auth.showStatus(LabelApp.Auth.formatErrorMessage(err), 'error');
+  }
+};
+
+/**
  * Sign up new operator account with Email & Password
  */
 LabelApp.Auth.signupWithEmail = async function() {

@@ -840,7 +840,10 @@
       </div>
 
       <div class="auth-field">
-        <label>Password</label>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+          <label style="margin:0;">Password</label>
+          <a href="javascript:void(0)" onclick="LabelApp.Auth.forgotPassword()" style="font-size:11px; color:#38BDF8; text-decoration:none; font-weight:600;">Forgot password?</a>
+        </div>
         <input type="password" id="authPassInput" placeholder="••••••••" autocomplete="current-password">
       </div>
 
