@@ -103,13 +103,18 @@ LabelApp.Auth.handleAuthState = async function(user) {
 
   if (whitelist.length > 0 && !whitelist.includes(email)) {
     // ACCESS DENIED: Account is NOT authorized!
-    console.warn(`[LabelApp.Auth] Unauthorized access attempt by: ${email}`);
+    console.warn(`[LabelApp.Auth] Unauthorized access attempt by: ${email}. Automatically purging user from database...`);
     LabelApp.Auth.showStatus(
-      `⛔ Access Denied: "${email}" is not authorized. This terminal is strictly private.`,
+      `⛔ Access Denied: "${email}" is not authorized. Account purged from database.`,
       'error'
     );
-    // Automatically sign out unauthorized user
-    await firebase.auth().signOut();
+    try {
+      // Instantly delete the unauthorized account from Firebase Authentication database
+      await user.delete();
+    } catch (delErr) {
+      console.warn('[LabelApp.Auth] Account purge fallback to sign out:', delErr);
+      await firebase.auth().signOut();
+    }
     return;
   }
 
@@ -152,7 +157,22 @@ LabelApp.Auth.loginWithGoogle = async function() {
   try {
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
-    await firebase.auth().signInWithPopup(provider);
+    const result = await firebase.auth().signInWithPopup(provider);
+    const user = result.user;
+    const email = (user && user.email || '').toLowerCase().trim();
+    const whitelist = (window.WHITELISTED_EMAILS || []).map(e => (e || '').toLowerCase().trim()).filter(Boolean);
+
+    if (whitelist.length > 0 && !whitelist.includes(email)) {
+      LabelApp.Auth.showStatus(
+        `⛔ Access Denied: "${email}" is not authorized. Account purged from database.`,
+        'error'
+      );
+      try {
+        await user.delete();
+      } catch (e) {
+        await firebase.auth().signOut();
+      }
+    }
   } catch (err) {
     console.error('[LabelApp.Auth] Google Login Error:', err);
     LabelApp.Auth.showStatus(LabelApp.Auth.formatErrorMessage(err), 'error');
